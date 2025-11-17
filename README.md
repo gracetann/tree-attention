@@ -15,7 +15,7 @@ Our goal is to parallelize the core reduction step in self-attention using a tre
 The formula for calculating self-attention for some query *q* is as follows:
 
 <p align="center">
-  <img src="images/formula.png" alt="Attention Formula" width="50%">
+  <img src="formula.png" alt="Attention Formula" width="50%">
 </p>
 
 From the above equation, there are opportunities for parallelism: each CUDA thread can compute the input of the softmax function in parallel, then perform multiple reductions to compute the output of the softmax functions (calculate local denominator and numerator, then reduce across threads). In the paper, "Tree Attention: Topology-aware Decoding for Long-context Attention on GPU Clusters", Shyam et. al explains that these reductions are associative and thus can be computed using a parallel tree reduction. Thus, for our project, we will implement a parallel, tree-based reduction using CUDA for the logsumexp and value accumulation steps.

@@ -1,0 +1,4 @@
+theme: jekyll-theme-minimal
+title: 15-418 Final Project
+kramdown:
+  math_engine: mathjax

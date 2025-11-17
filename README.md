@@ -1,6 +1,6 @@
 # Parallelizing Tree-Based Attention
 
-**Authors:** gxt, minjeon2
+**Authors:** Grace Tan (gxt), Sunny Kim (minjeon2)
 
 ---
 

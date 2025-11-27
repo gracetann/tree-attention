@@ -71,11 +71,11 @@ void attention_sequential(
 }
 
 // Inititalize random data
-void init_random(std::vector<float>& vec) {
-    static std::default_random_engine e;
-    static std::uniform_real_distribution<> dis(-1, 1);
-    for (auto& v : vec) v = dis(e);
-}
+// void init_random(std::vector<float>& vec) {
+//     static std::default_random_engine e;
+//     static std::uniform_real_distribution<> dis(-1, 1);
+//     for (auto& v : vec) v = dis(e);
+// }
 
 void load_binary(const std::string& filename, std::vector<float>& buffer) {
     std::ifstream file(filename, std::ios::binary);

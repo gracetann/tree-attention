@@ -8,7 +8,7 @@ python3 attn_verify.py
 ### 2\. Compile `attention.cpp`
 
 ```bash
-g++ -O3 -o attention attention.cpp
+g++ -O3 -o attention_serial attention.cpp
 ```
 
 ### 3\. Run and Verify
@@ -16,7 +16,11 @@ g++ -O3 -o attention attention.cpp
 Run the executable. It will load the binary files from `data/`, run the sequential attention algorithm, and compare the result against the PyTorch reference.
 
 ```bash
-./attention
+./attention_serial
+```
+
+```bash
+nvcc -o attention attention.cu -O3 -ccbin /usr/bin/g++-11
 ```
 
 **Expected Output:**

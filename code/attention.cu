@@ -7,8 +7,53 @@
 #include <string>  
 #include <chrono>
 
+#define TILE_SIZE 32
+
 __device__ inline int idx(int row, int col, int dim) {
     return row * dim + col;
+}
+
+__global__ void kernel_QKT_tiled(const float* Q, const float* K, float* S, int N, int D, float scale) {
+    __shared__ float tile_Q[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile_K[TILE_SIZE][TILE_SIZE];
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row = by * TILE_SIZE + ty;
+    int col = bx * TILE_SIZE + tx;
+
+    float val = 0.0f;
+
+    for (int i = 0; i < (D + TILE_SIZE - 1) / TILE_SIZE; i++) {
+        if (row < N && i * TILE_SIZE + tx < D) {
+            tile_Q[ty][tx] = Q[idx(row, i * TILE_SIZE + tx, D)];
+        } else {
+            tile_Q[ty][tx] = 0.0f;
+        }
+
+        if (col < N && i * TILE_SIZE + ty < D) {
+             tile_K[tx][ty] = K[idx(col, i * TILE_SIZE + ty, D)];
+        } else {
+            tile_K[tx][ty] = 0.0f;
+        }
+
+        __syncthreads();
+
+        for (int j = 0; j < TILE_SIZE; j++) {
+            if (i * TILE_SIZE + j < D) {
+                val += tile_Q[ty][j] * tile_K[tx][j];
+            }
+        }
+        
+        __syncthreads();
+    }
+
+    if (row < N && col < N) {
+        S[idx(row, col, N)] = val * scale;
+    }
 }
 
 // Compute Q * K^T 
@@ -41,7 +86,7 @@ __global__ void kernel_softmax(float* S, int N) {
     sdata[tid] = local_max;
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    for (int stride = blockDim.x / 2; stride > 32; stride >>= 1) {
         if (tid < stride) {
             if (sdata[tid + stride] > sdata[tid]) {
                 sdata[tid] = sdata[tid + stride];
@@ -49,6 +94,21 @@ __global__ void kernel_softmax(float* S, int N) {
         }
         __syncthreads();
     }
+
+    if (tid < 32) {
+        volatile float* vsmem = sdata; 
+        
+        if (blockDim.x >= 64 && vsmem[tid + 32] > vsmem[tid]) {
+            vsmem[tid] = vsmem[tid + 32];
+        }
+        if (vsmem[tid + 16] > vsmem[tid]) vsmem[tid] = vsmem[tid + 16];
+        if (vsmem[tid + 8] > vsmem[tid])  vsmem[tid] = vsmem[tid + 8];
+        if (vsmem[tid + 4] > vsmem[tid])  vsmem[tid] = vsmem[tid + 4];
+        if (vsmem[tid + 2] > vsmem[tid])  vsmem[tid] = vsmem[tid + 2];
+        if (vsmem[tid + 1] > vsmem[tid])  vsmem[tid] = vsmem[tid + 1];
+    }
+    
+    __syncthreads();
     float row_max = sdata[0]; 
     __syncthreads();
 
@@ -60,14 +120,81 @@ __global__ void kernel_softmax(float* S, int N) {
     sdata[tid] = local_sum;
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    
+    for (int stride = blockDim.x / 2; stride > 32; stride >>= 1) {
         if (tid < stride) {
             sdata[tid] += sdata[tid + stride];
         }
         __syncthreads();
     }
+
+    if (tid < 32) {
+        volatile float* vsmem = sdata;
+        
+        if (blockDim.x >= 64) vsmem[tid] += vsmem[tid + 32];
+        vsmem[tid] += vsmem[tid + 16];
+        vsmem[tid] += vsmem[tid + 8];
+        vsmem[tid] += vsmem[tid + 4];
+        vsmem[tid] += vsmem[tid + 2];
+        vsmem[tid] += vsmem[tid + 1];
+    }
+    __syncthreads();
     float row_sum = sdata[0];
     __syncthreads();
+
+    for (int i = tid; i < N; i += blockDim.x) {
+        float val = S[idx(row, i, N)];
+        S[idx(row, i, N)] = expf(val - row_max) / row_sum;
+    }
+}
+
+__global__ void kernel_softmax_naive(float* S, int N) {
+    extern __shared__ float sdata[]; 
+
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
+
+    float local_max = -1e20f;
+    for (int i = tid; i < N; i += blockDim.x) {
+        float val = S[idx(row, i, N)];
+        if (val > local_max) {
+            local_max = val;
+        }
+    }
+    sdata[tid] = local_max;
+    __syncthreads();
+
+    if (tid == 0) {
+        float row_max = -1e20f;
+        for (int i = 0; i < blockDim.x; i++) {
+            if (sdata[i] > row_max) {
+                row_max = sdata[i];
+            }
+        }
+        sdata[0] = row_max;
+    }
+    __syncthreads();
+
+    float row_max = sdata[0]; 
+
+    float local_sum = 0.0f;
+    for (int i = tid; i < N; i += blockDim.x) {
+        float val = S[idx(row, i, N)];
+        local_sum += expf(val - row_max);
+    }
+    sdata[tid] = local_sum;
+    __syncthreads();
+
+    if (tid == 0) {
+        float row_sum = 0.0f;
+        for (int i = 0; i < blockDim.x; i++) {
+            row_sum += sdata[i];
+        }
+        sdata[0] = row_sum;
+    }
+    __syncthreads();
+    
+    float row_sum = sdata[0];
 
     for (int i = tid; i < N; i += blockDim.x) {
         float val = S[idx(row, i, N)];
@@ -104,23 +231,39 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     cudaMemcpy(d_K, h_K, size_mat, cudaMemcpyHostToDevice);
     cudaMemcpy(d_V, h_V, size_mat, cudaMemcpyHostToDevice);
 
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((N + 15) / 16, (N + 15) / 16);
+    dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
+    dim3 numBlocks((N + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
     
     // Scores
     float scale = 1.0f / sqrtf((float)D);
-    kernel_QKT<<<numBlocks, threadsPerBlock>>>(d_Q, d_K, d_S, N, D, scale);
+    kernel_QKT_tiled<<<numBlocks, threadsPerBlock>>>(d_Q, d_K, d_S, N, D, scale);
     cudaDeviceSynchronize();
+
+    cudaEvent_t softmax_start, softmax_stop;
+    cudaEventCreate(&softmax_start);
+    cudaEventCreate(&softmax_stop);
 
     // Softmax (Tree Reduction)
     int threads_reduction = 1024; 
     size_t shared_mem_size = threads_reduction * sizeof(float);
-    kernel_softmax<<<N, threads_reduction, shared_mem_size>>>(d_S, N);
+
+    cudaEventRecord(softmax_start);
+    kernel_softmax_naive<<<N, threads_reduction, shared_mem_size>>>(d_S, N);
+    cudaEventRecord(softmax_stop);
+    cudaEventSynchronize(softmax_stop);
     cudaDeviceSynchronize();
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, softmax_start, softmax_stop);
+
+    std::cout << "Softmax Execution Time: " << milliseconds << " ms" << std::endl;
+
 
     dim3 blockOut(1, 1); // one thread per output element 
     dim3 gridOut(D, N);
@@ -130,7 +273,7 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
-    float milliseconds = 0;
+    milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
 
     std::cout << "Kernel Execution Time: " << milliseconds << " ms" << std::endl;
@@ -222,7 +365,7 @@ int main(int argc, char* argv[]) {
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end - start;
 
-    std::cout << "Time: " << duration.count() << " ms" << std::endl;
+    std::cout << "Total Execution Time: " << duration.count() << " ms" << std::endl;
 
     check_accuracy(Output, RefOutput);
 

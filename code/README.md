@@ -1,26 +1,23 @@
-### 1. Generate Input Data
-Run the Python script **locally** to generate random matrices (Q, K, V) and the expected output using PyTorch. This will create a `data/` directory containing binary files.
+### Generate Input Data
+Run the Python script **locally** to generate the test suite of random matrices (Q, K, V) and the expected output using PyTorch. This will create a `data/` directory containing the test cases. 
 
 ```bash
-python3 attn_verify.py
+mkdir data
+python3 gen_tests.py
 ```
 
-### 2\. Compile `attention.cpp`
+### Compile Serial Implementation
 
 ```bash
 g++ -O3 -o attention_serial attention.cpp
 ```
 
-### 3\. Run and Verify
+### Run and Verify
 
 Run the executable. It will load the binary files from `data/`, run the sequential attention algorithm, and compare the result against the PyTorch reference.
 
 ```bash
-./attention_serial
-```
-
-```bash
-nvcc -o attention attention.cu -O3 -ccbin /usr/bin/g++-11
+./attention_serial [TEST_CASE_NAME]
 ```
 
 **Expected Output:**
@@ -29,4 +26,17 @@ nvcc -o attention attention.cu -O3 -ccbin /usr/bin/g++-11
 Running Sequential Attention (N=1024, D=64)...
 Time: [X] ms
 PASSED
+```
+
+### Compile CUDA Program
+```bash
+export PATH=/usr/local/cuda-11.7/bin:${PATH}
+export LD_LIBRARY_PATH=/usr/local/cuda-11.7/lib64/:${LD_LIBRARY_PATH}
+nvcc -o attention attention.cu -O3 -ccbin /usr/bin/g++-11
+```
+
+### Run and Verify
+Run the CUDA executable on the generated tests:
+```bash
+./attention [TEST_CASE_NAME]
 ```

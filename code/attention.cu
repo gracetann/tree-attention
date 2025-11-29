@@ -7,7 +7,7 @@
 #include <string>  
 #include <chrono>
 
-#define TILE_SIZE 32
+#define TILE_SIZE 16
 
 __device__ inline int idx(int row, int col, int dim) {
     return row * dim + col;
@@ -203,7 +203,7 @@ __global__ void kernel_softmax_naive(float* S, int N) {
 }
 
 // compute S * V 
-__global__ void kernel_apply_attention(const float* S, const float* V, float* O, int N, int D) {
+__global__ void kernel_attention(const float* S, const float* V, float* O, int N, int D) {
     int row = blockIdx.y;
     int col = blockIdx.x;
 
@@ -213,6 +213,47 @@ __global__ void kernel_apply_attention(const float* S, const float* V, float* O,
             acc += S[idx(row, k, N)] * V[idx(k, col, D)];
         }
         O[idx(row, col, D)] = acc;
+    }
+}
+
+__global__ void kernel_attention_tiled(const float* S, const float* V, float* O, int N, int D) {
+    __shared__ float tile_S[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile_V[TILE_SIZE][TILE_SIZE];
+
+    int bx = blockIdx.x; int by = blockIdx.y;
+    int tx = threadIdx.x; int ty = threadIdx.y;
+
+    int row = by * TILE_SIZE + ty; 
+    int col = bx * TILE_SIZE + tx;
+
+    float val = 0.0f;
+    for (int m = 0; m < (N + TILE_SIZE - 1) / TILE_SIZE; ++m) {
+        
+        // load tile into shared memory
+        if (row < N && (m * TILE_SIZE + tx) < N) {
+            tile_S[ty][tx] = S[idx(row, m * TILE_SIZE + tx, N)];
+        } else {
+            tile_S[ty][tx] = 0.0f;
+        }
+
+        if ((m * TILE_SIZE + ty) < N && col < D) {
+            tile_V[ty][tx] = V[idx(m * TILE_SIZE + ty, col, D)];
+        } else {
+            tile_V[ty][tx] = 0.0f;
+        }
+
+        __syncthreads(); 
+
+        // compute partial dot product
+        for (int k = 0; k < TILE_SIZE; ++k) {
+            val += tile_S[ty][k] * tile_V[k][tx];
+        }
+        
+        __syncthreads(); 
+    }
+
+    if (row < N && col < D) {
+        O[idx(row, col, D)] = val;
     }
 }
 
@@ -254,7 +295,7 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     size_t shared_mem_size = threads_reduction * sizeof(float);
 
     cudaEventRecord(softmax_start);
-    kernel_softmax_naive<<<N, threads_reduction, shared_mem_size>>>(d_S, N);
+    kernel_softmax<<<N, threads_reduction, shared_mem_size>>>(d_S, N);
     cudaEventRecord(softmax_stop);
     cudaEventSynchronize(softmax_stop);
     cudaDeviceSynchronize();
@@ -264,10 +305,11 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
 
     std::cout << "Softmax Execution Time: " << milliseconds << " ms" << std::endl;
 
-
-    dim3 blockOut(1, 1); // one thread per output element 
-    dim3 gridOut(D, N);
-    kernel_apply_attention<<<gridOut, blockOut>>>(d_S, d_V, d_O, N, D);
+    // dim3 blockOut(1, 1); // one thread per output element 
+    // dim3 gridOut(D, N);
+    // kernel_attention<<<gridOut, blockOut>>>(d_S, d_V, d_O, N, D);
+    dim3 numBlocksAttn((D + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
+    kernel_attention_tiled<<<numBlocksAttn, threadsPerBlock>>>(d_S, d_V, d_O, N, D);
     cudaDeviceSynchronize();
 
     cudaEventRecord(stop);

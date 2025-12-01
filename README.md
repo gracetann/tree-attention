@@ -4,6 +4,11 @@
 
 ---
 
+### Links
+[Midway Report](https://github.com/gracetann/tree-attention/blob/main/milestone_report.pdf)
+
+---
+
 ## Summary
 
 Our goal is to parallelize the core reduction step in self-attention using a tree-based reduction instead of a sequential loop, and compare its performance with a baseline sequential attention implementation.

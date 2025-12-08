@@ -23,6 +23,9 @@ void attention_sequential(
     std::vector<float> S(N * N);
     float scale = 1.0f / std::sqrt(static_cast<float>(D));
 
+
+    auto start = std::chrono::high_resolution_clock::now();
+
     // QK^T
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
@@ -33,6 +36,13 @@ void attention_sequential(
             S[flat_idx(i, j, N)] = dot * scale;
         }
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+
+    std::cout << "QK^T Time: " << duration.count() << " ms" << std::endl;
+
+
+    start = std::chrono::high_resolution_clock::now();
 
     // Softmax
     for (int i = 0; i < N; i++) {
@@ -57,7 +67,13 @@ void attention_sequential(
             S[flat_idx(i, j, N)] /= sum_exp;
         }
     }
+    end = std::chrono::high_resolution_clock::now();
+    duration = end - start;
 
+    std::cout << "Softmax Time: " << duration.count() << " ms" << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    
     // S * V ---
     for (int i = 0; i < N; i++) {
         for (int k = 0; k < D; k++) {
@@ -68,6 +84,10 @@ void attention_sequential(
             Output[flat_idx(i, k, D)] = acc;
         }
     }
+    end = std::chrono::high_resolution_clock::now();
+    duration = end - start;
+
+    std::cout << "SV Time: " << duration.count() << " ms" << std::endl;
 }
 
 // Inititalize random data
@@ -154,7 +174,7 @@ int main(int argc, char* argv[]) {
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end - start;
 
-    std::cout << "Time: " << duration.count() << " ms" << std::endl;
+    std::cout << "Total Time: " << duration.count() << " ms" << std::endl;
 
     check_accuracy(Output, RefOutput);
 

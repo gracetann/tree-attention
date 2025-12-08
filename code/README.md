@@ -40,3 +40,10 @@ Run the CUDA executable on the generated tests:
 ```bash
 ./attention [TEST_CASE_NAME]
 ```
+
+### NCU Kernel Profiling
+
+```bash
+nvcc -o attention attention.cu -O3 -lineinfo -ccbin /usr/bin/g++-11
+ncu --metrics gpu__time_duration.sum,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__throughput.avg.pct_of_peak_sustained_elapsed --target-processes all ./attention n4096_d64
+```

@@ -7,7 +7,7 @@
 #include <string>  
 #include <chrono>
 
-#define TILE_SIZE 16
+#define TILE_SIZE 8
 
 __device__ inline int idx(int row, int col, int dim) {
     return row * dim + col;
@@ -280,10 +280,23 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
+
+    cudaEvent_t score_start, score_stop;
+    cudaEventCreate(&score_start);
+    cudaEventCreate(&score_stop);
     
     // Scores
     float scale = 1.0f / sqrtf((float)D);
     kernel_QKT_tiled<<<numBlocks, threadsPerBlock>>>(d_Q, d_K, d_S, N, D, scale);
+    cudaEventRecord(score_stop);
+    cudaEventSynchronize(score_stop);
+    cudaDeviceSynchronize();
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, score_start, score_stop);
+
+    std::cout << "Score Execution Time: " << milliseconds << " ms" << std::endl;
+    
     cudaDeviceSynchronize();
 
     cudaEvent_t softmax_start, softmax_stop;
@@ -295,22 +308,34 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     size_t shared_mem_size = threads_reduction * sizeof(float);
 
     cudaEventRecord(softmax_start);
-    kernel_softmax<<<N, threads_reduction, shared_mem_size>>>(d_S, N);
+    kernel_softmax<<<N, threads_reduction, shared_mem_size>>>(d_S, N); /* replace1 */
     cudaEventRecord(softmax_stop);
     cudaEventSynchronize(softmax_stop);
     cudaDeviceSynchronize();
 
-    float milliseconds = 0;
+    milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, softmax_start, softmax_stop);
 
     std::cout << "Softmax Execution Time: " << milliseconds << " ms" << std::endl;
 
+    cudaEvent_t output_start, output_stop;
+    cudaEventCreate(&output_start);
+    cudaEventCreate(&output_stop);
+    
+    cudaEventRecord(output_start);
     // dim3 blockOut(1, 1); // one thread per output element 
     // dim3 gridOut(D, N);
     // kernel_attention<<<gridOut, blockOut>>>(d_S, d_V, d_O, N, D);
     dim3 numBlocksAttn((D + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
     kernel_attention_tiled<<<numBlocksAttn, threadsPerBlock>>>(d_S, d_V, d_O, N, D);
+    cudaEventRecord(output_stop);
+    cudaEventSynchronize(output_stop);
     cudaDeviceSynchronize();
+
+    milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, output_start, output_stop);
+
+    std::cout << "SV Execution Time: " << milliseconds << " ms" << std::endl;
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -321,6 +346,84 @@ void attention(const float* h_Q, const float* h_K, const float* h_V, float* h_O,
     std::cout << "Kernel Execution Time: " << milliseconds << " ms" << std::endl;
 
     cudaMemcpy(h_O, d_O, size_mat, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_Q); 
+    cudaFree(d_K); 
+    cudaFree(d_V); 
+    cudaFree(d_S); 
+    cudaFree(d_O);
+}
+
+void attention_pipelined(const float* h_Q, const float* h_K, const float* h_V, float* h_O, int N, int D, int batch_size) {
+    float *d_Q, *d_K, *d_V, *d_S, *d_O;
+    
+    size_t size_mat = (size_t)batch_size * N * D * sizeof(float);
+    size_t size_scores = (size_t)batch_size * N * N * sizeof(float);
+    
+    size_t one_mat_floats = (size_t)N * D;
+    size_t one_score_floats = (size_t)N * N;
+
+    cudaMalloc(&d_Q, size_mat);
+    cudaMalloc(&d_K, size_mat);
+    cudaMalloc(&d_V, size_mat);
+    cudaMalloc(&d_O, size_mat);
+    cudaMalloc(&d_S, size_scores);
+
+    cudaMemcpy(d_Q, h_Q, size_mat, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_K, h_K, size_mat, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_V, h_V, size_mat, cudaMemcpyHostToDevice);
+
+    std::vector<cudaStream_t> streams(batch_size);
+    for(int i = 0; i < batch_size; i++) {
+        cudaStreamCreate(&streams[i]);
+    }
+
+    dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
+    dim3 gridQKT((N + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
+    
+    int threads_reduction = 1024;
+    size_t shared_mem_size = threads_reduction * sizeof(float);
+    
+    dim3 gridAttention((D + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
+    float scale = 1.0f / sqrtf((float)D);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    // Launch all kernels for all batches asynchronously in separate streams
+    for(int i = 0; i < batch_size; i++) {
+        float* batch_Q = d_Q + (i * one_mat_floats);
+        float* batch_K = d_K + (i * one_mat_floats);
+        float* batch_V = d_V + (i * one_mat_floats);
+        float* batch_O = d_O + (i * one_mat_floats);
+        float* batch_S = d_S + (i * one_score_floats);
+
+        // Q * K^T
+        kernel_QKT_tiled<<<gridQKT, threadsPerBlock, 0, streams[i]>>>(batch_Q, batch_K, batch_S, N, D, scale);
+
+        // Softmax (Tree)
+        kernel_softmax<<<N, threads_reduction, shared_mem_size, streams[i]>>>(batch_S, N); /* replace2 */
+
+        // S * V
+        kernel_attention_tiled<<<gridAttention, threadsPerBlock, 0, streams[i]>>>(batch_S, batch_V, batch_O, N, D);
+    }
+
+    cudaDeviceSynchronize(); 
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    std::cout << "Pipelined Execution Time (Batch=" << batch_size << "): " << milliseconds << " ms" << std::endl;
+    std::cout << "Avg per Batch: " << milliseconds / batch_size << " ms" << std::endl;
+
+    cudaMemcpy(h_O, d_O, size_mat, cudaMemcpyDeviceToHost);
+
+    for(int i = 0; i < batch_size; i++) {
+        cudaStreamDestroy(streams[i]);
+    }
 
     cudaFree(d_Q); 
     cudaFree(d_K); 
@@ -375,39 +478,43 @@ int main(int argc, char* argv[]) {
     std::string test_case = argv[1];
     std::string base_path = "data/" + test_case + "/";
 
-    // Read Dimensions
     int N, D;
+    int batch_size = 1; 
+    
     std::ifstream meta_file(base_path + "meta.txt");
     if (!meta_file.is_open()) {
         std::cerr << "Error: Could not open test case " << base_path << std::endl;
         return 1;
     }
+    
     meta_file >> N >> D;
+    if (!(meta_file >> batch_size)) {
+        batch_size = 1; 
+    }
     meta_file.close();
 
-    std::cout << "Test Case: " << test_case << " | N=" << N << " D=" << D << std::endl;
+    std::cout << "Test Case: " << test_case << " | N=" << N << " D=" << D << " Batch=" << batch_size << std::endl;
 
-    std::vector<float> Q(N * D);
-    std::vector<float> K(N * D);
-    std::vector<float> V(N * D);
-    std::vector<float> Output(N * D);
-    std::vector<float> RefOutput(N * D);
+    size_t total_mat_size = (size_t)batch_size * N * D;
+    
+    std::vector<float> Q(total_mat_size);
+    std::vector<float> K(total_mat_size);
+    std::vector<float> V(total_mat_size);
+    std::vector<float> Output(total_mat_size);
+    std::vector<float> RefOutput(total_mat_size);
 
     load_binary(base_path + "q.bin", Q);
     load_binary(base_path + "k.bin", K);
     load_binary(base_path + "v.bin", V);
     load_binary(base_path + "out_ref.bin", RefOutput);
 
-    std::cout << "Running CUDA Attention (N=" << N << ", D=" << D << ")..." << std::endl;
 
-    auto start = std::chrono::high_resolution_clock::now();
-    
-    attention(Q.data(), K.data(), V.data(), Output.data(), N, D);
-    
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> duration = end - start;
-
-    std::cout << "Total Execution Time: " << duration.count() << " ms" << std::endl;
+    if (batch_size == 1) {
+        attention(Q.data(), K.data(), V.data(), Output.data(), N, D);
+    } else{
+        std::cout << "Running Pipelined Attention..." << std::endl;
+        attention_pipelined(Q.data(), K.data(), V.data(), Output.data(), N, D, batch_size);
+    }
 
     check_accuracy(Output, RefOutput);
 

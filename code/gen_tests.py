@@ -5,7 +5,7 @@ import os
 import argparse
 
 def generate_test_case(N, D):
-    # naming convention: n{N}_d{D}
+    
     base_dir="data"
     test_case_name = f"n{N}_d{D}"
     case_dir = os.path.join(base_dir, test_case_name)

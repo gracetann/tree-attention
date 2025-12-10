@@ -11,7 +11,7 @@ def generate_test_case(N, D):
     case_dir = os.path.join(base_dir, test_case_name)
     os.makedirs(case_dir, exist_ok=True)
     
-    print(f"Generating {test_case_name} (N={N}, D={D})...")
+    print(f"generating test case with N={N}, D={D}")
     
     torch.manual_seed(42)
     
@@ -20,7 +20,6 @@ def generate_test_case(N, D):
     K = torch.randn(1, 1, N, D)
     V = torch.randn(1, 1, N, D)
     
-    # Compute Reference Output
     ref_out = F.scaled_dot_product_attention(Q, K, V, is_causal=False)
     
     Q.numpy().flatten().astype(np.float32).tofile(os.path.join(case_dir, "q.bin"))
@@ -28,7 +27,6 @@ def generate_test_case(N, D):
     V.numpy().flatten().astype(np.float32).tofile(os.path.join(case_dir, "v.bin"))
     ref_out.numpy().flatten().astype(np.float32).tofile(os.path.join(case_dir, "out_ref.bin"))
     
-    # Save Metadata 
     with open(os.path.join(case_dir, "meta.txt"), "w") as f:
         f.write(f"{N} {D}")
 

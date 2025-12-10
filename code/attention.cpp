@@ -74,7 +74,7 @@ void attention_sequential(
 
     start = std::chrono::high_resolution_clock::now();
     
-    // S * V ---
+    // S * V
     for (int i = 0; i < N; i++) {
         for (int k = 0; k < D; k++) {
             float acc = 0.0f;
@@ -118,13 +118,9 @@ bool check_accuracy(const std::vector<float>& ours, const std::vector<float>& re
             diff_idx = i;
         }
     }
-
-    // std::cout << "Max Absolute Error: " << max_diff << " at index " << diff_idx << std::endl;
-    // std::cout << "  Ours: " << ours[diff_idx] << std::endl;
-    // std::cout << "  Ref:  " << ref[diff_idx] << std::endl;
-
+    
     if (max_diff > tol) {
-        std::cerr << "FAILED (Tolerance: " << tol << ")" << std::endl;
+        std::cerr << "FAILED" << std::endl;
         return false;
     } else {
         std::cout << "PASSED" << std::endl;
@@ -135,18 +131,17 @@ bool check_accuracy(const std::vector<float>& ours, const std::vector<float>& re
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <test_case_name>" << std::endl;
+        std::cerr << "invalid input args" << std::endl;
         return 1;
     }
 
     std::string test_case = argv[1];
     std::string base_path = "data/" + test_case + "/";
 
-    // Read Dimensions
     int N, D;
     std::ifstream meta_file(base_path + "meta.txt");
     if (!meta_file.is_open()) {
-        std::cerr << "Error: Could not open test case " << base_path << std::endl;
+        std::cerr << "invalid test case" << base_path << std::endl;
         return 1;
     }
     meta_file >> N >> D;

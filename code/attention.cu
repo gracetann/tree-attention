@@ -471,7 +471,7 @@ bool check_accuracy(const std::vector<float>& ours, const std::vector<float>& re
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <test_case_name>" << std::endl;
+        std::cerr << "incorrect input params" << std::endl;
         return 1;
     }
 
@@ -483,7 +483,7 @@ int main(int argc, char* argv[]) {
     
     std::ifstream meta_file(base_path + "meta.txt");
     if (!meta_file.is_open()) {
-        std::cerr << "Error: Could not open test case " << base_path << std::endl;
+        std::cerr << "test case file open error" << base_path << std::endl;
         return 1;
     }
     
@@ -512,7 +512,7 @@ int main(int argc, char* argv[]) {
     if (batch_size == 1) {
         attention(Q.data(), K.data(), V.data(), Output.data(), N, D);
     } else{
-        std::cout << "Running Pipelined Attention..." << std::endl;
+        std::cout << "testing pipeline algorithm" << std::endl;
         attention_pipelined(Q.data(), K.data(), V.data(), Output.data(), N, D, batch_size);
     }
 

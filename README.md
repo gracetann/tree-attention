@@ -3,6 +3,13 @@
 **Authors:** Grace Tan (gxt), Sunny Kim (minjeon2)
 
 ---
+### Links
+
+[Milestone Report](https://github.com/gracetann/tree-attention/blob/main/418_milestone_report.pdf)
+
+[Final Report](https://github.com/gracetann/tree-attention/blob/main/418_final_report.pdf)
+
+---
 
 ## Summary
 
